@@ -1,0 +1,11 @@
+# Build output
+bin/
+
+# Local context data (personal, not for version control)
+.contx/
+
+# Claude Code local project settings
+.claude/
+
+# macOS
+.DS_Store
