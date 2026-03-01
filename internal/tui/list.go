@@ -12,7 +12,6 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	blist "github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/paginator"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/taavtamm/contx/internal/store"
@@ -194,7 +193,6 @@ func NewList(styles *Styles, ms *store.MultiStore, w, h int) (ListModel, error) 
 	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(false)
 	l.DisableQuitKeybindings()
-	l.Paginator.Type = paginator.Arabic
 	l.Styles.ArabicPagination = lipgloss.NewStyle().Foreground(styles.Theme.Subtle)
 
 	return ListModel{
@@ -367,6 +365,7 @@ func (m *ListModel) Reload() error {
 	m.unmanaged = store.FindUnmanagedFiles(scanRoot, managedNames)
 
 	m.list.SetItems(buildListItems(contexts, m.projectName, m.gitBranch, m.unmanaged))
+	m.list.SetSize(m.width/2-2, m.height-6)
 	m.previewScroll = 0
 	return nil
 }
@@ -393,7 +392,6 @@ func (m ListModel) View() string {
 	leftWidth := w/2 - 1
 	rightWidth := w - leftWidth - 3
 
-	m.list.SetSize(leftWidth-2, m.height-6)
 	leftPane := lipgloss.NewStyle().Width(leftWidth).Height(m.height - 6).Render(m.list.View())
 
 	rightPane := m.renderPreview(rightWidth, m.height-6)
