@@ -293,8 +293,13 @@ func (m ListModel) Update(msg tea.Msg) (ListModel, tea.Cmd) {
 		m.list.SetSize(m.width/2-2, m.height-6)
 	}
 
+	prevIdx := m.list.Index()
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
+	if newIdx := m.list.Index(); newIdx != prevIdx {
+		m.skipHeaders(newIdx > prevIdx)
+		m.previewScroll = 0
+	}
 	return m, cmd
 }
 

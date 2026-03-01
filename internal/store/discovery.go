@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -115,6 +116,17 @@ func FindUnmanagedFiles(projectRoot string, managedNames map[string]bool) []Unma
 		})
 		return nil
 	})
+
+	// Sort by depth (shallow first), then alphabetically within the same depth.
+	sort.Slice(files, func(i, j int) bool {
+		di := strings.Count(files[i].RelPath, string(filepath.Separator))
+		dj := strings.Count(files[j].RelPath, string(filepath.Separator))
+		if di != dj {
+			return di < dj
+		}
+		return files[i].RelPath < files[j].RelPath
+	})
+
 	return files
 }
 
