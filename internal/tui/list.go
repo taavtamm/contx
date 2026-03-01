@@ -12,6 +12,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	blist "github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/paginator"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/taavtamm/contx/internal/store"
@@ -193,6 +194,8 @@ func NewList(styles *Styles, ms *store.MultiStore, w, h int) (ListModel, error) 
 	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(false)
 	l.DisableQuitKeybindings()
+	l.Paginator.Type = paginator.Arabic
+	l.Styles.ArabicPagination = lipgloss.NewStyle().Foreground(styles.Theme.Subtle)
 
 	return ListModel{
 		styles:      styles,
@@ -298,7 +301,6 @@ func (m ListModel) Update(msg tea.Msg) (ListModel, tea.Cmd) {
 	m.list, cmd = m.list.Update(msg)
 	if newIdx := m.list.Index(); newIdx != prevIdx {
 		m.skipHeaders(newIdx > prevIdx)
-		m.previewScroll = 0
 	}
 	return m, cmd
 }
