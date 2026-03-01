@@ -617,21 +617,37 @@ func projectInfo(root string) (name, branch string) {
 // copyToClipboard writes text to the system clipboard and returns a copiedMsg.
 func copyToClipboard(text string) tea.Cmd {
 	return func() tea.Msg {
-		var cmd *exec.Cmd
-		switch runtime.GOOS {
-		case "darwin":
-			cmd = exec.Command("pbcopy")
-		default:
-			// Try xclip first, fall back to xsel.
-			if _, err := exec.LookPath("xclip"); err == nil {
-				cmd = exec.Command("xclip", "-selection", "clipboard")
-			} else {
-				cmd = exec.Command("xsel", "--clipboard", "--input")
-			}
+		cmd := clipboardCmd()
+		if cmd == nil {
+			return copiedMsg{} // no clipboard tool found — fail silently
 		}
 		cmd.Stdin = strings.NewReader(text)
 		cmd.Run() //nolint:errcheck — clipboard failure is non-fatal
 		return copiedMsg{}
+	}
+}
+
+// clipboardCmd returns the appropriate clipboard write command for the current
+// platform and display environment, or nil if none is available.
+func clipboardCmd() *exec.Cmd {
+	switch runtime.GOOS {
+	case "darwin":
+		return exec.Command("pbcopy")
+	default: // Linux and others
+		// Wayland takes priority when WAYLAND_DISPLAY is set.
+		if os.Getenv("WAYLAND_DISPLAY") != "" {
+			if path, err := exec.LookPath("wl-copy"); err == nil {
+				return exec.Command(path)
+			}
+		}
+		// X11 fallbacks.
+		if path, err := exec.LookPath("xclip"); err == nil {
+			return exec.Command(path, "-selection", "clipboard")
+		}
+		if path, err := exec.LookPath("xsel"); err == nil {
+			return exec.Command(path, "--clipboard", "--input")
+		}
+		return nil
 	}
 }
 

@@ -8,6 +8,10 @@ Context management for Claude Code. Store reusable text snippets and serve them 
 go install github.com/taavtamm/contx@latest
 ```
 
+Or grab a pre-built binary from the [releases](https://github.com/taavtamm/contx/releases) page (macOS arm64/amd64, Linux arm64/amd64).
+
+**Linux clipboard support** requires one of: `wl-clipboard` (Wayland), `xclip`, or `xsel`.
+
 ## Register with Claude Code
 
 ```sh
