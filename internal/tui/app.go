@@ -59,6 +59,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		a.width = msg.Width
 		a.height = msg.Height
+		a.list.resize(a.width, a.height)
 
 	case NewContextMsg:
 		a.form = NewForm(a.styles, a.ms, nil, a.width, a.height)

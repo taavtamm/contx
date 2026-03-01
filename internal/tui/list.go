@@ -14,6 +14,7 @@ import (
 	blist "github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/taavtamm/contx/internal/store"
 )
 
@@ -52,44 +53,59 @@ func (b branchItem) Description() string { return "" }
 // unmanagedItem represents a repo file not yet imported as a contx context.
 type unmanagedItem struct{ File store.UnmanagedFile }
 
-func (u unmanagedItem) FilterValue() string { return u.File.Name }
+func (u unmanagedItem) FilterValue() string { return u.File.RelPath }
 func (u unmanagedItem) Title() string       { return u.File.Name }
 func (u unmanagedItem) Description() string { return u.File.RelPath }
 
 // listDelegate renders items in the list.
 type listDelegate struct{ styles *Styles }
 
-func (d listDelegate) Height() int                               { return 1 }
-func (d listDelegate) Spacing() int                              { return 0 }
+func (d listDelegate) Height() int                              { return 1 }
+func (d listDelegate) Spacing() int                             { return 0 }
 func (d listDelegate) Update(_ tea.Msg, _ *blist.Model) tea.Cmd { return nil }
 
 func (d listDelegate) Render(w io.Writer, m blist.Model, index int, item blist.Item) {
 	s := d.styles
+	iw := m.Width() - 3 // keep a 1-col safety gutter for terminal width mismatches
+	if iw < 1 {
+		iw = 1
+	}
+	rowW := m.Width()
+	if rowW < 1 {
+		rowW = 1
+	}
+	// truncPad truncates text at iw chars then pads to exactly iw — guarantees one line.
+	truncPad := func(text string) string {
+		t := ansi.Truncate(sanitizeForTerminal(text), iw, "")
+		return lipgloss.NewStyle().Width(iw).Render(t)
+	}
+	// paintFullRow guarantees we overwrite the entire terminal row and don't leave
+	// stale glyphs from previously longer lines.
+	paintFullRow := func(rendered string) string {
+		return lipgloss.NewStyle().Width(rowW).MaxWidth(rowW).Render(rendered)
+	}
 	switch it := item.(type) {
 	case sectionHeader:
-		io.WriteString(w, s.SectionHeader.Render(it.Label))
+		cell := truncPad(it.Label)
+		io.WriteString(w, paintFullRow(s.SectionHeader.Render(cell)))
 	case branchItem:
-		io.WriteString(w, lipgloss.NewStyle().Foreground(s.Theme.Green).Padding(0, 1).Render("⎇ "+it.Branch))
+		cell := truncPad("⎇ " + it.Branch)
+		row := lipgloss.NewStyle().Foreground(s.Theme.Green).Padding(0, 1).Render(cell)
+		io.WriteString(w, paintFullRow(row))
 	case unmanagedItem:
-		label := it.File.RelPath
+		cell := truncPad(it.File.RelPath)
 		if index == m.Index() {
-			io.WriteString(w, s.ItemSelected.Render(
-				lipgloss.NewStyle().Width(m.Width()-2).Render(label),
-			))
+			io.WriteString(w, paintFullRow(s.ItemSelected.Render(cell)))
 		} else {
-			io.WriteString(w, lipgloss.NewStyle().Foreground(s.Theme.Yellow).Padding(0, 1).
-				Render(lipgloss.NewStyle().Width(m.Width()-2).Render(label)))
+			row := lipgloss.NewStyle().Foreground(s.Theme.Yellow).Padding(0, 1).Render(cell)
+			io.WriteString(w, paintFullRow(row))
 		}
 	case listItem:
-		name := it.Ctx.Name
+		cell := truncPad(it.Ctx.Name)
 		if index == m.Index() {
-			io.WriteString(w, s.ItemSelected.Render(
-				lipgloss.NewStyle().Width(m.Width()-2).Render(name),
-			))
+			io.WriteString(w, paintFullRow(s.ItemSelected.Render(cell)))
 		} else {
-			io.WriteString(w, s.ItemNormal.Render(
-				lipgloss.NewStyle().Width(m.Width()-2).Render(name),
-			))
+			io.WriteString(w, paintFullRow(s.ItemNormal.Render(cell)))
 		}
 	}
 }
@@ -191,11 +207,11 @@ func NewList(styles *Styles, ms *store.MultiStore, w, h int) (ListModel, error) 
 	l.SetShowHelp(false)
 	l.SetShowTitle(false)
 	l.SetShowStatusBar(false)
-	l.SetFilteringEnabled(false)
+	l.SetFilteringEnabled(true)
 	l.DisableQuitKeybindings()
-	l.Styles.ArabicPagination = lipgloss.NewStyle().Foreground(styles.Theme.Subtle)
-
-	return ListModel{
+	l.SetShowPagination(false) // disable built-in pagination to avoid PerPage/TotalPages mismatch
+	
+	m := ListModel{
 		styles:      styles,
 		keys:        DefaultListKeys,
 		ms:          ms,
@@ -206,7 +222,9 @@ func NewList(styles *Styles, ms *store.MultiStore, w, h int) (ListModel, error) 
 		gitBranch:   gitBranch,
 		width:       w,
 		height:      h,
-	}, nil
+	}
+	m.resize(w, h)
+	return m, nil
 }
 
 func (m ListModel) Init() tea.Cmd { return nil }
@@ -214,70 +232,77 @@ func (m ListModel) Init() tea.Cmd { return nil }
 func (m ListModel) Update(msg tea.Msg) (ListModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		switch {
-		case key.Matches(msg, m.keys.Quit):
-			return m, tea.Quit
+		// When the list filter is active, only quit is handled here; all other keys go to the list.
+		if m.list.SettingFilter() {
+			if key.Matches(msg, m.keys.Quit) {
+				return m, tea.Quit
+			}
+		} else {
+			switch {
+			case key.Matches(msg, m.keys.Quit):
+				return m, tea.Quit
 
-		case key.Matches(msg, m.keys.Tab):
-			m.focusRight = !m.focusRight
-			return m, nil
-
-		case key.Matches(msg, m.keys.Up):
-			if m.focusRight {
-				if m.previewScroll > 0 {
-					m.previewScroll--
-				}
+			case key.Matches(msg, m.keys.Tab):
+				m.focusRight = !m.focusRight
 				return m, nil
-			}
-			var cmd tea.Cmd
-			m.list, cmd = m.list.Update(msg)
-			m.skipHeaders(false)
-			m.previewScroll = 0
-			return m, cmd
 
-		case key.Matches(msg, m.keys.Down):
-			if m.focusRight {
-				m.previewScroll++ // clamped in renderPreview
-				return m, nil
-			}
-			var cmd tea.Cmd
-			m.list, cmd = m.list.Update(msg)
-			m.skipHeaders(true)
-			m.previewScroll = 0
-			return m, cmd
-
-		case key.Matches(msg, m.keys.New):
-			if !m.focusRight {
-				return m, func() tea.Msg { return NewContextMsg{} }
-			}
-
-		case key.Matches(msg, m.keys.Edit):
-			if !m.focusRight {
-				if c := m.selectedContext(); c != nil {
-					return m, func() tea.Msg { return EditContextMsg{Ctx: c} }
+			case key.Matches(msg, m.keys.Up):
+				if m.focusRight {
+					if m.previewScroll > 0 {
+						m.previewScroll--
+					}
+					return m, nil
 				}
-				if f := m.selectedUnmanaged(); f != nil {
-					file := *f
-					return m, func() tea.Msg { return ImportFileMsg{File: file} }
-				}
-			}
+				var cmd tea.Cmd
+				m.list, cmd = m.list.Update(msg)
+				m.skipHeaders(false)
+				m.previewScroll = 0
+				return m, cmd
 
-		case key.Matches(msg, m.keys.Delete):
-			if !m.focusRight {
-				if c := m.selectedContext(); c != nil {
-					return m, func() tea.Msg { return DeleteContextMsg{Ctx: c} }
+			case key.Matches(msg, m.keys.Down):
+				if m.focusRight {
+					m.previewScroll++ // clamped in renderPreview
+					return m, nil
 				}
-			}
+				var cmd tea.Cmd
+				m.list, cmd = m.list.Update(msg)
+				m.skipHeaders(true)
+				m.previewScroll = 0
+				return m, cmd
 
-		case key.Matches(msg, m.keys.Copy):
-			if !m.focusRight {
-				if c := m.selectedContext(); c != nil {
-					return m, copyToClipboard(c.URI())
+			case key.Matches(msg, m.keys.New):
+				if !m.focusRight {
+					return m, func() tea.Msg { return NewContextMsg{} }
 				}
-			}
 
-		case key.Matches(msg, m.keys.CycleTheme):
-			return m, func() tea.Msg { return CycleThemeMsg{} }
+			case key.Matches(msg, m.keys.Edit):
+				if !m.focusRight {
+					if c := m.selectedContext(); c != nil {
+						return m, func() tea.Msg { return EditContextMsg{Ctx: c} }
+					}
+					if f := m.selectedUnmanaged(); f != nil {
+						file := *f
+						return m, func() tea.Msg { return ImportFileMsg{File: file} }
+					}
+				}
+
+			case key.Matches(msg, m.keys.Delete):
+				if !m.focusRight {
+					if c := m.selectedContext(); c != nil {
+						return m, func() tea.Msg { return DeleteContextMsg{Ctx: c} }
+					}
+				}
+
+			case key.Matches(msg, m.keys.Copy):
+				if !m.focusRight {
+					if c := m.selectedContext(); c != nil {
+						return m, copyToClipboard(c.URI())
+					}
+				}
+
+			case key.Matches(msg, m.keys.CycleTheme):
+				return m, func() tea.Msg { return CycleThemeMsg{} }
+			}
 		}
 
 	case copiedMsg:
@@ -289,9 +314,7 @@ func (m ListModel) Update(msg tea.Msg) (ListModel, tea.Cmd) {
 		return m, nil
 
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		m.list.SetSize(m.width/2-2, m.height-6)
+		m.resize(msg.Width, msg.Height)
 	}
 
 	prevIdx := m.list.Index()
@@ -365,43 +388,98 @@ func (m *ListModel) Reload() error {
 	m.unmanaged = store.FindUnmanagedFiles(scanRoot, managedNames)
 
 	m.list.SetItems(buildListItems(contexts, m.projectName, m.gitBranch, m.unmanaged))
-	m.list.SetSize(m.width/2-2, m.height-6)
+	m.resize(m.width, m.height)
 	m.previewScroll = 0
 	return nil
+}
+
+// resize adjusts the list model dimensions to fit the pane layout.
+func (m *ListModel) resize(w, h int) {
+	m.width = w
+	m.height = h
+	if w < 1 || h < 1 {
+		m.list.SetSize(0, 0)
+		return
+	}
+
+	safeW := w
+	if safeW > 2 {
+		// Keep two columns free so terminals never auto-wrap our last column.
+		safeW -= 2
+	}
+	// Left pane gets roughly half the safe width.
+	// rightWidth is safeW - leftWidth - 3 (sep + padding).
+	leftWidth := safeW/2 - 1
+	if leftWidth < 1 {
+		leftWidth = 1
+	}
+
+	// paneHeight excludes header(2) + footer(1) + divider(1) + margin(2) = 6 lines.
+	paneHeight := h - 6
+	if paneHeight < 1 {
+		paneHeight = 1
+	}
+
+	m.list.SetSize(leftWidth, paneHeight)
 }
 
 func (m ListModel) View() string {
 	s := m.styles
 	w := m.width
+	if w < 1 || m.height < 1 {
+		return ""
+	}
+	// Recalculate layout dimensions to match resize().
+	safeW := w
+	if safeW > 2 {
+		safeW -= 2
+	}
+	leftWidth := safeW/2 - 1
+	if leftWidth < 1 {
+		leftWidth = 1
+	}
+	rightWidth := safeW - leftWidth - 3
+	if rightWidth < 1 {
+		rightWidth = 1
+	}
+	paneHeight := m.height - 6
+	if paneHeight < 1 {
+		paneHeight = 1
+	}
 
 	// Header
 	appTitleStr := s.AppTitle.Render("contx")
 	themeStr := s.ThemeName.Render(s.Theme.Name)
 	quitStr := s.HintDesc.Render("q quit")
 	rightStr := themeStr + "  " + quitStr
+	padW := safeW - lipgloss.Width(appTitleStr) - lipgloss.Width(rightStr) - 4
+	if padW < 0 {
+		padW = 0
+	}
 	middlePad := lipgloss.NewStyle().
-		Width(w - lipgloss.Width(appTitleStr) - lipgloss.Width(rightStr) - 4).
+		Width(padW).
 		Render("")
 	header := lipgloss.NewStyle().
 		Padding(0, 1).
-		Width(w).
+		Width(safeW).
 		Render(lipgloss.JoinHorizontal(lipgloss.Top, appTitleStr, middlePad, rightStr))
 
-	divider := s.Divider.Render(strings.Repeat("━", w))
+	divider := s.Divider.Render(strings.Repeat("━", safeW))
 
-	leftWidth := w/2 - 1
-	rightWidth := w - leftWidth - 3
+	// Left pane: use list view directly, no extra wrapping.
+	// truncateLines handles final safety check.
+	leftPane := m.list.View()
 
-	leftPane := lipgloss.NewStyle().Width(leftWidth).Height(m.height - 6).Render(m.list.View())
-
-	rightPane := m.renderPreview(rightWidth, m.height-6)
+	// Right pane: wrap preview content.
+	rightPane := lipgloss.NewStyle().Width(rightWidth).MaxWidth(rightWidth).Height(paneHeight).MaxHeight(paneHeight).Render(
+		truncateLines(m.renderPreview(rightWidth, paneHeight), rightWidth))
 
 	// Vertical separator — accent colour when preview is focused
 	sepStyle := s.PaneDivider
 	if m.focusRight {
 		sepStyle = s.Divider
 	}
-	sepLines := make([]string, m.height-6)
+	sepLines := make([]string, paneHeight)
 	for i := range sepLines {
 		sepLines[i] = sepStyle.Render("│")
 	}
@@ -427,6 +505,7 @@ func (m ListModel) View() string {
 			copyHint = lipgloss.NewStyle().Foreground(s.Theme.Green).Render("✓ copied!")
 		}
 		hints = []string{
+			s.HintKey.Render("/") + " " + s.HintDesc.Render("filter"),
 			s.HintKey.Render("n") + " " + s.HintDesc.Render("new"),
 			s.HintKey.Render("e") + " " + s.HintDesc.Render(editHint),
 			s.HintKey.Render("d") + " " + s.HintDesc.Render("delete"),
@@ -434,10 +513,19 @@ func (m ListModel) View() string {
 			s.HintKey.Render("tab") + " " + s.HintDesc.Render("→ preview"),
 			s.HintKey.Render("t") + " " + s.HintDesc.Render("theme"),
 		}
+		if m.list.SettingFilter() || m.list.IsFiltered() {
+			hints = append(hints, s.HintKey.Render("esc")+" "+s.HintDesc.Render("clear filter"))
+		}
+		if tp := m.list.Paginator.TotalPages; tp > 1 {
+			hints = append(hints, s.HintDesc.Render(fmt.Sprintf("%d/%d", m.list.Paginator.Page+1, tp)))
+		}
 	}
-	footer := s.Footer.Width(w).Render("  " + strings.Join(hints, "   "))
-
-	return lipgloss.JoinVertical(lipgloss.Left, header, divider, "", content, "", divider, footer)
+	footer := s.Footer.Width(safeW).Render("  " + strings.Join(hints, "   "))
+	// Exactly 6 non-content lines: header, divider, blank, divider, footer (no extra blank).
+	// Total = 1+1+1+paneHeight+1+1 = paneHeight+6 = m.height so header/footer stay visible.
+	view := lipgloss.JoinVertical(lipgloss.Left, header, divider, "", content, divider, footer)
+	// Enforce exact line count and width so no wrap/overflow pushes header/footer off screen.
+	return limitLineCount(view, m.height, safeW)
 }
 
 func (m ListModel) renderPreview(width, height int) string {
@@ -461,7 +549,7 @@ func (m ListModel) renderPreview(width, height int) string {
 	}
 
 	// Word-wrap the full body and get all visual lines.
-	wrappedBody := s.PreviewBody.Width(bodyWidth).Render(c.Body)
+	wrappedBody := s.PreviewBody.Width(bodyWidth).MaxWidth(bodyWidth).Render(sanitizeForTerminal(c.Body))
 	allBodyLines := strings.Split(wrappedBody, "\n")
 	totalBodyLines := len(allBodyLines)
 
@@ -490,7 +578,7 @@ func (m ListModel) renderPreview(width, height int) string {
 	bodyText := strings.Join(allBodyLines[scroll:end], "\n")
 
 	// Title row — append scroll position when content overflows.
-	title := s.PreviewTitle.Render(c.Name)
+	title := s.PreviewTitle.Render(sanitizeForTerminal(c.Name))
 	if totalBodyLines > bodyAvail {
 		pos := s.PreviewMeta.Render(fmt.Sprintf("%d/%d", scroll+bodyAvail, totalBodyLines))
 		pad := width - lipgloss.Width(title) - lipgloss.Width(pos) - indentLen*2
@@ -501,7 +589,7 @@ func (m ListModel) renderPreview(width, height int) string {
 	titleDiv := s.PreviewDivider.Render(strings.Repeat("─", width-2))
 
 	// Meta block.
-	tagStr := strings.Join(c.Tags, "  ")
+	tagStr := sanitizeForTerminal(strings.Join(c.Tags, "  "))
 	if tagStr == "" {
 		tagStr = s.PreviewMeta.Render("—")
 	} else {
@@ -534,7 +622,7 @@ func (m ListModel) renderPreview(width, height int) string {
 		indentBlock(metaBlock, indent),
 	)
 
-	return lipgloss.NewStyle().Width(width).Height(height).Render(preview)
+	return lipgloss.NewStyle().Width(width).Height(height).Render(truncateLines(preview, width))
 }
 
 func (m ListModel) renderUnmanagedPreview(f store.UnmanagedFile, width, height int) string {
@@ -546,12 +634,12 @@ func (m ListModel) renderUnmanagedPreview(f store.UnmanagedFile, width, height i
 		bodyWidth = 10
 	}
 
-	title := lipgloss.NewStyle().Foreground(s.Theme.Yellow).Bold(true).Render(f.RelPath)
+	title := lipgloss.NewStyle().Foreground(s.Theme.Yellow).Bold(true).MaxWidth(bodyWidth).Render(sanitizeForTerminal(f.RelPath))
 	titleDiv := s.PreviewDivider.Render(strings.Repeat("─", width-2))
 	hint := s.PreviewMeta.Render("e / ↩  import as context")
 
 	// Word-wrap the preview content and apply scroll.
-	wrappedBody := s.PreviewBody.Width(bodyWidth).Render(f.Preview)
+	wrappedBody := s.PreviewBody.Width(bodyWidth).MaxWidth(bodyWidth).Render(sanitizeForTerminal(f.Preview))
 	allBodyLines := strings.Split(wrappedBody, "\n")
 	totalBodyLines := len(allBodyLines)
 
@@ -590,7 +678,7 @@ func (m ListModel) renderUnmanagedPreview(f store.UnmanagedFile, width, height i
 		indent+hintDiv,
 		indent+hint,
 	)
-	return lipgloss.NewStyle().Width(width).Height(height).Render(preview)
+	return lipgloss.NewStyle().Width(width).Height(height).Render(truncateLines(preview, width))
 }
 
 func indentBlock(text, prefix string) string {
@@ -599,6 +687,58 @@ func indentBlock(text, prefix string) string {
 		lines[i] = prefix + l
 	}
 	return strings.Join(lines, "\n")
+}
+
+// truncateLines ensures every line in text is at most maxWidth display columns.
+// This guards against CJK / emoji characters whose terminal width may disagree
+// with lipgloss calculations.
+func truncateLines(text string, maxWidth int) string {
+	// Keep a one-column gutter to avoid auto-wrap in terminals that disagree
+	// on East Asian / emoji width.
+	if maxWidth > 1 {
+		maxWidth--
+	}
+	lines := strings.Split(text, "\n")
+	for i, l := range lines {
+		lines[i] = ansi.Truncate(l, maxWidth, "")
+	}
+	return strings.Join(lines, "\n")
+}
+
+// limitLineCount returns at most maxLines lines of text, each truncated to maxWidth.
+// Ensures the TUI never outputs more than the terminal height/width so header/footer stay visible.
+func limitLineCount(text string, maxLines, maxWidth int) string {
+	if maxLines < 1 || maxWidth < 1 {
+		return ""
+	}
+	if maxWidth > 1 {
+		maxWidth--
+	}
+	lines := strings.Split(text, "\n")
+	if len(lines) > maxLines {
+		lines = lines[:maxLines]
+	}
+	for i, l := range lines {
+		lines[i] = ansi.Truncate(l, maxWidth, "")
+	}
+	return strings.Join(lines, "\n")
+}
+
+// sanitizeForTerminal normalizes text so raw control characters don't break TUI
+// redraw/layout in terminal output.
+func sanitizeForTerminal(text string) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	text = strings.ReplaceAll(text, "\t", "    ")
+	return strings.Map(func(r rune) rune {
+		if r == '\n' {
+			return r
+		}
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, text)
 }
 
 func fmtTime(t time.Time) string {

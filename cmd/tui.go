@@ -28,7 +28,7 @@ func runTUI(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("init TUI: %w", err)
 	}
 
-	p := tea.NewProgram(app, tea.WithAltScreen())
+	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithANSICompressor())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
 		os.Exit(1)
