@@ -1,6 +1,7 @@
 package store
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,102 +66,67 @@ type UnmanagedFile struct {
 	Preview string // first 30 lines of content, for the TUI preview pane
 }
 
-// contextFilePaths lists individual files (relative to project root) that
-// contx considers candidate context files.
-var contextFilePaths = []string{
-	"README.md",
-	"AGENTS.md",
-	"CLAUDE.md",
-	"CONTRIBUTING.md",
-	"CHANGELOG.md",
-	"ARCHITECTURE.md",
-	"DESIGN.md",
-	"DEVELOPMENT.md",
-	"CONVENTIONS.md",
-	"NOTES.md",
-	"HACKING.md",
-	".github/CONTRIBUTING.md",
-	".github/PULL_REQUEST_TEMPLATE.md",
-	"docs/README.md",
-	"docs/ARCHITECTURE.md",
-	"docs/CONTRIBUTING.md",
+// skipDirs are directory names that are never walked for context files.
+var skipDirs = map[string]bool{
+	".git":         true,
+	".contx":       true,
+	".claude":      true,
+	"node_modules": true,
+	"vendor":       true,
+	"dist":         true,
+	"build":        true,
+	"__pycache__":  true,
+	".venv":        true,
+	"venv":         true,
+	"target":       true, // Rust
 }
 
-// contextScanDirs lists directories (relative to project root) whose contents
-// are scanned for .md and .mdc files.
-var contextScanDirs = []string{
-	".cursor/rules",
-	".cursor/commands",
-}
-
-// FindUnmanagedFiles returns project files that exist but are not already
-// tracked as contx contexts (i.e. their derived name is not in managedNames).
-// projectRoot must be a non-empty absolute path; callers should fall back to
-// os.Getwd() when no project root is detected.
+// FindUnmanagedFiles walks the entire project tree and returns all .md/.mdc
+// files that have not already been imported as a contx context.
 func FindUnmanagedFiles(projectRoot string, managedNames map[string]bool) []UnmanagedFile {
 	if projectRoot == "" {
 		return nil
 	}
 	var files []UnmanagedFile
-
-	// Check individual well-known files.
-	for _, rel := range contextFilePaths {
-		abs := filepath.Join(projectRoot, rel)
-		info, err := os.Stat(abs)
-		if err != nil || info.IsDir() {
-			continue
+	filepath.WalkDir(projectRoot, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
 		}
+		if d.IsDir() {
+			if skipDirs[d.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(d.Name()))
+		if ext != ".md" && ext != ".mdc" {
+			return nil
+		}
+		rel, _ := filepath.Rel(projectRoot, path)
 		name := deriveName(rel)
 		if managedNames[name] {
-			continue
+			return nil
 		}
 		files = append(files, UnmanagedFile{
-			Path:    abs,
+			Path:    path,
 			RelPath: rel,
 			Name:    name,
-			Preview: readFilePreview(abs, 30),
+			Preview: readFilePreview(path, 30),
 		})
-	}
-
-	// Scan directories for .md and .mdc files.
-	for _, dir := range contextScanDirs {
-		absDir := filepath.Join(projectRoot, dir)
-		entries, err := os.ReadDir(absDir)
-		if err != nil {
-			continue
-		}
-		for _, entry := range entries {
-			if entry.IsDir() {
-				continue
-			}
-			ext := strings.ToLower(filepath.Ext(entry.Name()))
-			if ext != ".md" && ext != ".mdc" {
-				continue
-			}
-			rel := filepath.Join(dir, entry.Name())
-			abs := filepath.Join(projectRoot, rel)
-			name := deriveName(rel)
-			if managedNames[name] {
-				continue
-			}
-			files = append(files, UnmanagedFile{
-				Path:    abs,
-				RelPath: rel,
-				Name:    name,
-				Preview: readFilePreview(abs, 30),
-			})
-		}
-	}
-
+		return nil
+	})
 	return files
 }
 
-// deriveName converts a relative path like "AGENTS.md" or ".github/CONTRIBUTING.md"
-// into a context name like "agents" or "contributing".
+// deriveName converts a relative path into a context name.
+// "README.md" → "readme", "docs/ARCH.md" → "docs-arch",
+// ".cursor/commands/foo.mdc" → "cursor-commands-foo"
 func deriveName(relPath string) string {
-	base := filepath.Base(relPath)
-	name := strings.TrimSuffix(base, filepath.Ext(base))
-	return strings.ToLower(name)
+	name := strings.TrimSuffix(relPath, filepath.Ext(relPath))
+	name = strings.ReplaceAll(name, string(filepath.Separator), "-")
+	name = strings.ReplaceAll(name, ".", "-")
+	name = strings.ToLower(strings.Trim(name, "-"))
+	return name
 }
 
 func readFilePreview(path string, maxLines int) string {
