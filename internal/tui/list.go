@@ -93,12 +93,32 @@ func (d listDelegate) Render(w io.Writer, m blist.Model, index int, item blist.I
 		row := lipgloss.NewStyle().Foreground(s.Theme.Green).Padding(0, 1).Render(cell)
 		io.WriteString(w, paintFullRow(row))
 	case unmanagedItem:
-		cell := truncPad(it.File.RelPath)
+		// Path in theme subtle, filename in theme yellow (Tokyo Night and others provide Yellow).
+		dir := filepath.Dir(it.File.RelPath)
+		pathPart := ""
+		if dir != "." {
+			pathPart = dir + "/"
+		}
+		namePart := filepath.Base(it.File.RelPath)
+		pathSanitized := sanitizeForTerminal(pathPart)
+		nameSanitized := sanitizeForTerminal(namePart)
+		fullRaw := pathSanitized + nameSanitized
+		truncatedRaw := ansi.Truncate(fullRaw, iw, "")
+		var cell string
+		if pathPart == "" {
+			cell = lipgloss.NewStyle().Foreground(s.Theme.Yellow).Render(truncatedRaw)
+		} else if len(truncatedRaw) <= len(pathSanitized) {
+			cell = lipgloss.NewStyle().Foreground(s.Theme.Subtle).Render(truncatedRaw)
+		} else {
+			pathStyled := lipgloss.NewStyle().Foreground(s.Theme.Subtle).Render(truncatedRaw[:len(pathSanitized)])
+			nameStyled := lipgloss.NewStyle().Foreground(s.Theme.Yellow).Render(truncatedRaw[len(pathSanitized):])
+			cell = pathStyled + nameStyled
+		}
+		cell = lipgloss.NewStyle().Width(iw).Render(cell)
 		if index == m.Index() {
 			io.WriteString(w, paintFullRow(s.ItemSelected.Render(cell)))
 		} else {
-			row := lipgloss.NewStyle().Foreground(s.Theme.Yellow).Padding(0, 1).Render(cell)
-			io.WriteString(w, paintFullRow(row))
+			io.WriteString(w, paintFullRow(lipgloss.NewStyle().Padding(0, 1).Render(cell)))
 		}
 	case listItem:
 		cell := truncPad(it.Ctx.Name)
@@ -302,6 +322,11 @@ func (m ListModel) Update(msg tea.Msg) (ListModel, tea.Cmd) {
 
 			case key.Matches(msg, m.keys.CycleTheme):
 				return m, func() tea.Msg { return CycleThemeMsg{} }
+
+			case key.Matches(msg, m.keys.Connect):
+				if !m.focusRight {
+					return m, func() tea.Msg { return OpenConnectViewMsg{} }
+				}
 			}
 		}
 
@@ -511,6 +536,7 @@ func (m ListModel) View() string {
 			s.HintKey.Render("d") + " " + s.HintDesc.Render("delete"),
 			copyHint,
 			s.HintKey.Render("tab") + " " + s.HintDesc.Render("→ preview"),
+			s.HintKey.Render("M") + " " + s.HintDesc.Render("connect MCP"),
 			s.HintKey.Render("t") + " " + s.HintDesc.Render("theme"),
 		}
 		if m.list.SettingFilter() || m.list.IsFiltered() {
@@ -635,6 +661,10 @@ func (m ListModel) renderUnmanagedPreview(f store.UnmanagedFile, width, height i
 	}
 
 	title := lipgloss.NewStyle().Foreground(s.Theme.Yellow).Bold(true).MaxWidth(bodyWidth).Render(sanitizeForTerminal(f.RelPath))
+	if f.Truncated {
+		tag := s.PreviewMeta.Render(" (preview)")
+		title += tag
+	}
 	titleDiv := s.PreviewDivider.Render(strings.Repeat("─", width-2))
 	hint := s.PreviewMeta.Render("e / ↩  import as context")
 

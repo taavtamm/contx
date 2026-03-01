@@ -64,7 +64,8 @@ type UnmanagedFile struct {
 	Path    string // absolute path
 	RelPath string // relative to project root (for display)
 	Name    string // suggested context name derived from the filename
-	Preview string // first 30 lines of content, for the TUI preview pane
+	Preview   string // first 500 lines of content, for the TUI preview pane
+	Truncated bool   // true when the file has more lines than Preview contains
 }
 
 // skipDirs are directory names that are never walked for context files.
@@ -108,11 +109,13 @@ func FindUnmanagedFiles(projectRoot string, managedNames map[string]bool) []Unma
 		if managedNames[name] {
 			return nil
 		}
+		preview, truncated := readFilePreview(path, 500)
 		files = append(files, UnmanagedFile{
-			Path:    path,
-			RelPath: rel,
-			Name:    name,
-			Preview: readFilePreview(path, 30),
+			Path:      path,
+			RelPath:   rel,
+			Name:      name,
+			Preview:   preview,
+			Truncated: truncated,
 		})
 		return nil
 	})
@@ -141,14 +144,15 @@ func deriveName(relPath string) string {
 	return name
 }
 
-func readFilePreview(path string, maxLines int) string {
+func readFilePreview(path string, maxLines int) (string, bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return ""
+		return "", false
 	}
 	lines := strings.SplitN(string(data), "\n", maxLines+1)
-	if len(lines) > maxLines {
+	truncated := len(lines) > maxLines
+	if truncated {
 		lines = lines[:maxLines]
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join(lines, "\n"), truncated
 }

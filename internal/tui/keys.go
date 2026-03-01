@@ -11,6 +11,7 @@ type ListKeyMap struct {
 	Delete     key.Binding
 	Copy       key.Binding
 	Filter     key.Binding
+	Connect    key.Binding
 	Tab        key.Binding
 	Help       key.Binding
 	Quit       key.Binding
@@ -62,6 +63,10 @@ var DefaultListKeys = ListKeyMap{
 	Filter: key.NewBinding(
 		key.WithKeys("/"),
 		key.WithHelp("/", "filter"),
+	),
+	Connect: key.NewBinding(
+		key.WithKeys("M"),
+		key.WithHelp("M", "connect MCP"),
 	),
 	Tab: key.NewBinding(
 		key.WithKeys("tab"),

@@ -15,6 +15,7 @@ const (
 	screenList screen = iota
 	screenForm
 	screenConfirm
+	screenConnect
 )
 
 // App is the root Bubble Tea model.
@@ -26,6 +27,7 @@ type App struct {
 	list       ListModel
 	form       FormModel
 	confirm    ConfirmModel
+	connect    ConnectModel
 	width      int
 	height     int
 }
@@ -101,6 +103,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.screen = screenList
 		return a, nil
 
+	case OpenConnectViewMsg:
+		a.connect = NewConnect(a.styles, a.width, a.height)
+		a.screen = screenConnect
+		return a, nil
+
+	case ConnectBackMsg:
+		a.screen = screenList
+		return a, nil
+
 	case CycleThemeMsg:
 		a.themeIndex = (a.themeIndex + 1) % len(AllThemes)
 		newTheme := AllThemes[a.themeIndex]
@@ -126,6 +137,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		a.confirm, cmd = a.confirm.Update(msg)
 		return a, cmd
+	case screenConnect:
+		var cmd tea.Cmd
+		a.connect, cmd = a.connect.Update(msg)
+		return a, cmd
 	}
 
 	return a, nil
@@ -137,6 +152,8 @@ func (a App) View() string {
 		return a.form.View()
 	case screenConfirm:
 		return a.confirm.View()
+	case screenConnect:
+		return a.connect.View()
 	default:
 		return a.list.View()
 	}
