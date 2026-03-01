@@ -65,8 +65,8 @@ type UnmanagedFile struct {
 	Preview string // first 30 lines of content, for the TUI preview pane
 }
 
-// contextFilePaths lists the relative paths (from project root) that contx
-// considers candidate context files.
+// contextFilePaths lists individual files (relative to project root) that
+// contx considers candidate context files.
 var contextFilePaths = []string{
 	"README.md",
 	"AGENTS.md",
@@ -81,10 +81,16 @@ var contextFilePaths = []string{
 	"HACKING.md",
 	".github/CONTRIBUTING.md",
 	".github/PULL_REQUEST_TEMPLATE.md",
-	".cursor/rules",
 	"docs/README.md",
 	"docs/ARCHITECTURE.md",
 	"docs/CONTRIBUTING.md",
+}
+
+// contextScanDirs lists directories (relative to project root) whose contents
+// are scanned for .md and .mdc files.
+var contextScanDirs = []string{
+	".cursor/rules",
+	".cursor/commands",
 }
 
 // FindUnmanagedFiles returns project files that exist but are not already
@@ -93,12 +99,15 @@ var contextFilePaths = []string{
 // os.Getwd() when no project root is detected.
 func FindUnmanagedFiles(projectRoot string, managedNames map[string]bool) []UnmanagedFile {
 	if projectRoot == "" {
-		return nil // safety guard; callers should provide a fallback
+		return nil
 	}
 	var files []UnmanagedFile
+
+	// Check individual well-known files.
 	for _, rel := range contextFilePaths {
 		abs := filepath.Join(projectRoot, rel)
-		if _, err := os.Stat(abs); err != nil {
+		info, err := os.Stat(abs)
+		if err != nil || info.IsDir() {
 			continue
 		}
 		name := deriveName(rel)
@@ -112,6 +121,37 @@ func FindUnmanagedFiles(projectRoot string, managedNames map[string]bool) []Unma
 			Preview: readFilePreview(abs, 30),
 		})
 	}
+
+	// Scan directories for .md and .mdc files.
+	for _, dir := range contextScanDirs {
+		absDir := filepath.Join(projectRoot, dir)
+		entries, err := os.ReadDir(absDir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			ext := strings.ToLower(filepath.Ext(entry.Name()))
+			if ext != ".md" && ext != ".mdc" {
+				continue
+			}
+			rel := filepath.Join(dir, entry.Name())
+			abs := filepath.Join(projectRoot, rel)
+			name := deriveName(rel)
+			if managedNames[name] {
+				continue
+			}
+			files = append(files, UnmanagedFile{
+				Path:    abs,
+				RelPath: rel,
+				Name:    name,
+				Preview: readFilePreview(abs, 30),
+			})
+		}
+	}
+
 	return files
 }
 
